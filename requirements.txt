@@ -1,0 +1,5 @@
+opencv-python
+opencv-contrib-python
+numpy
+cupy-cuda12x
+pyrealsense2

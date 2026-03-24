@@ -35,7 +35,7 @@ MIN_DISTANCE = 7
 DILATE_KERNEL = (2, 2)
 
 # Residual threshold for classifying pseudo motion vs true motion
-RESIDUAL_THRESH_PIX = 2.1
+RESIDUAL_THRESH_PIX = 1.8
 
 # Fusion / trust thresholds
 IMU_ANGLE_DIFF_THRESH_DEG = 7

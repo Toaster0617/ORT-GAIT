@@ -25,8 +25,8 @@ from ultralytics import YOLO
 # 现在我们将它分级：
 # HIGH: 用于普通背景，抑制噪声 (设为 0.5 或更高)
 # LOW:  用于 YOLO 框内，捕捉微小运动 (设为 0.15 或 0.2)
-THRESH_HIGH_BG = 0.6       # 框外：不仅要动，还要动得明显
-THRESH_LOW_SEMANTIC = 0.15 # 框内：只要有一点点动，就认为是动
+THRESH_HIGH_BG = 2.5       # 框外：不仅要动，还要动得明显
+THRESH_LOW_SEMANTIC = 1.2 # 框内：只要有一点点动，就认为是动
 
 # Grid & Cluster
 CELL_MAG_THRESH = 2.0
@@ -237,79 +237,95 @@ def main(save_pred_dir=None):
                                                    blockSize=7)
                 continue
 
-            # ----- 5. Fundamental Matrix & Affine (Ego-motion Compensation) -----
-            try:
-                F, fm_mask = cv2.findFundamentalMat(good_prev, good_next, cv2.FM_RANSAC, 3.0)
-            except Exception:
-                F = None
-                fm_mask = None
+            # =================================================================
+            # Step 5: Background-Locked Motion Estimation (完全修复版)
+            # =================================================================
+            
+            # 1. 严格分离：只用“非 YOLO 区域”的点来计算相机的运动
+            bg_indices = []
+            for i, (px, py) in enumerate(good_prev.astype(int)):
+                if 0 <= px < IMG_W and 0 <= py < IMG_H:
+                    if sensitivity_mask[py, px] == 0: # 0 是背景
+                        bg_indices.append(i)
+            bg_indices = np.array(bg_indices)
 
-            if fm_mask is None:
-                fm_mask_flat = np.ones((len(good_prev),), dtype=np.uint8)
+            # 2. 计算背景运动模型 (Affine/Homography)
+            # 这里的 H 矩阵代表“相机的背景运动”
+            if len(bg_indices) >= 8:
+                src_bg = good_prev[bg_indices]
+                dst_bg = good_next[bg_indices]
+                # 使用 RANSAC 抗噪
+                H, inliers = cv2.estimateAffinePartial2D(src_bg, dst_bg, method=cv2.RANSAC, ransacReprojThreshold=2.0)
             else:
-                fm_mask_flat = fm_mask.reshape(-1).astype(np.uint8)
+                # 备用：背景点不够时，退化为全局估计
+                H, _ = cv2.estimateAffinePartial2D(good_prev, good_next, method=cv2.RANSAC, ransacReprojThreshold=3.0)
 
-            bg_idx = np.where(fm_mask_flat == 1)[0]
-            if len(bg_idx) >= 8:
-                H, inliers = cv2.estimateAffinePartial2D(good_prev[bg_idx], good_next[bg_idx], method=cv2.RANSAC,
-                                                         ransacReprojThreshold=RANSAC_REPROJ_THRESH)
-            else:
-                H, inliers = cv2.estimateAffinePartial2D(good_prev, good_next, method=cv2.RANSAC,
-                                                         ransacReprojThreshold=RANSAC_REPROJ_THRESH)
+            if H is None: H = np.eye(2, 3)
 
-            if H is None:
-                H = np.eye(2, 3)
-
-            # Inlier Ratio
-            inlier_ratio = 0.0
-            if inliers is not None:
-                try:
-                    inlier_ratio = float(np.count_nonzero(inliers)) / inliers.size
-                except Exception:
-                    inlier_ratio = 0.0
-
-            # Rotation Trust Logic
+            # === [修复关键点] 定义旋转参考和标志位 ===
+            # 从 H 矩阵中提取视觉旋转角度
             theta_vis_rad = math.atan2(H[1, 0], H[0, 0])
             theta_vis_deg = math.degrees(theta_vis_rad)
-            use_visual_rot = False
-            if (angle_diff_deg(theta_vis_deg, gyro_yaw_filt) > TRUST_ROTATION_DISAGREE_DEG) and (inlier_ratio > INLIER_RATIO_THRESH):
-                use_visual_rot = True
-            ref_rot = theta_vis_deg if use_visual_rot else gyro_yaw_filt
-
-            # Calc Residuals
-            pred_next = cv2.transform(good_prev.reshape(1, -1, 2), H)[0]
-            residuals = good_next - pred_next
-            mags = np.linalg.norm(residuals, axis=1)
             
-            # ----- 6. Adaptive Threshold Filtering (The Core Innovation) -----
+            # 在背景锁定模式下，我们优先信任视觉计算的背景旋转
+            # 定义 use_visual_rot 防止 HUD 报错
+            use_visual_rot = True 
+            ref_rot = theta_vis_deg 
+            # =========================================
+
+            # 3. 计算“背景流速度” (用于抗抖动/视差抑制)
+            bg_speed = 0.0
+            if len(bg_indices) > 0:
+                # 预测背景位置
+                pred_bg = cv2.transform(good_prev[bg_indices].reshape(1, -1, 2), H)[0]
+                # 计算实际光流模长
+                actual_flow_bg = np.linalg.norm(good_next[bg_indices] - good_prev[bg_indices], axis=1)
+                # 取中位数代表相机速度 (抗噪)
+                bg_speed = np.median(actual_flow_bg)
+
+            # =================================================================
+            # Step 6: Dynamic Thresholding (解决晃动幅度不同的问题)
+            # =================================================================
+            
             valid_idx = []
             
+            # 1. 预测：如果所有点都是静止的，它们下一帧应该在哪？
+            pred_next = cv2.transform(good_prev.reshape(1, -1, 2), H)[0]
+            
+            # 2. 残差：实际位置 - 预测位置
+            # 对于静止物体，Residual ≈ 0 (理想) 或 ≈ 视差误差 (现实)
+            # 对于移动物体，Residual = 真实移动量
+            residuals = good_next - pred_next
+            mags = np.linalg.norm(residuals, axis=1)
+
+            # 3. 设定“浮动阈值” (关键！)
+            # 这里的逻辑是：相机晃得越快，容忍度越高。
+            # base_thresh = 0.8 (处理传感器底噪)
+            # parallax_factor = 0.15 * bg_speed (处理视差：相机动10px，允许1.5px的视差误差)
+            dynamic_thresh = 0.8 + 0.15 * bg_speed
+
             for i, mag in enumerate(mags):
                 px, py = int(good_prev[i][0]), int(good_prev[i][1])
-                
-                # 越界检查
-                if px < 0 or px >= IMG_W or py < 0 or py >= IMG_H:
-                    continue
-                
-                # **核心逻辑**：检查该点是否在 YOLO 敏感区域内
-                is_sensitive = (sensitivity_mask[py, px] == 1)
-                
-                # 自适应阈值选择
-                if is_sensitive:
-                    # 在语义框内：使用低阈值 (Lower threshold)，捕捉微小移动
-                    current_thresh = THRESH_LOW_SEMANTIC
-                else:
-                    # 在背景区域：使用高阈值 (Higher threshold)，抑制噪声
-                    current_thresh = THRESH_HIGH_BG
-                
-                # FM Outlier 依然是强有力的证据
-                is_fm_outlier = (fm_mask_flat[i] == 0)
+                if px < 0 or px >= IMG_W or py < 0 or py >= IMG_H: continue
 
-                # 如果残差超过了当前自适应阈值，或者是 FM Outlier，则认为是动点
-                if mag > current_thresh or (is_fm_outlier and mag > THRESH_LOW_SEMANTIC):
+                is_sensitive = (sensitivity_mask[py, px] == 1)
+                is_moving_pixel = False
+                
+                if is_sensitive:
+                    # 【框内策略】
+                    # 使用动态阈值。
+                    # 如果相机静止(speed=0)，阈值=0.8 -> 抓住慢走的人。
+                    # 如果相机狂晃(speed=20)，阈值=3.8 -> 放过视差大的静止人。
+                    if mag > dynamic_thresh: 
+                        is_moving_pixel = True
+                else:
+                    # 【框外策略】
+                    # 框外我们可以沿用 motion_new.py 的严格逻辑，或者设定一个很高的阈值
+                    if mag > max(2.5, dynamic_thresh * 1.5):
+                        is_moving_pixel = True
+                
+                if is_moving_pixel:
                     valid_idx.append(i)
-                    
-                    # 统计 YOLO 框内的动点数量 (用于后续变色)
                     if is_sensitive:
                         for box in semantic_boxes:
                             bx1, by1, bx2, by2 = box['bbox']

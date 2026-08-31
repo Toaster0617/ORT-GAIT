@@ -1,0 +1,109 @@
+network:
+  # IPC sends camera JPEG fragments to this PC address.
+  pc_host: "10.192.17.244"
+  bind_host: "0.0.0.0"
+  camera_udp_port: 7000
+  visibility_udp_port: 8001
+  quest_image_tcp_port: 8082
+  quest_yaw_udp_port: 8084
+  udp_chunk_bytes: 1200
+  reassembly_timeout_s: 0.25
+  max_camera_jpeg_bytes: 4194304
+
+capture:
+  width: 1280
+  height: 720
+  fps: 30
+  jpeg_quality: 90
+
+stitch:
+  panorama_size: [4350, 740]
+  weight_exponent: 6.5
+  output_jpeg_quality: 80
+  # QuestDemo/ImageReceiver.cs currently allocates a 1 MiB receive buffer.
+  max_output_jpeg_bytes: 1048576
+
+dynamic:
+  pixel_difference_threshold: 30
+  # The former value 0 made every frame pass. 0.10 keeps the same entropy
+  # algorithm while allowing truly static regions to be skipped.
+  entropy_threshold: 0.10
+
+runtime:
+  base_yaw_deg: -30.0
+  headset_fov_deg: 80.0
+  processing_fps: 30.0
+  visibility_heartbeat_s: 0.5
+  preview: false
+
+cameras:
+  - name: cam0
+    serial: "338122301918"
+    angle_range_deg: [-180.0, -120.0]
+    homography:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+  - name: cam1
+    serial: "338522301241"
+    angle_range_deg: [-120.0, -60.0]
+    homography:
+      - [1.0, 0.0, 760.0]
+      - [0.0, 1.0, 10.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+
+  - name: cam2
+    serial: "309622301481"
+    angle_range_deg: [-60.0, 0.0]
+    homography:
+      - [1.0, 0.0, 1510.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+
+  - name: cam3
+    serial: "309622301066"
+    angle_range_deg: [0.0, 60.0]
+    homography:
+      - [1.0, 0.0, 2250.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+
+  - name: cam4
+    serial: "242422304700"
+    angle_range_deg: [60.0, 120.0]
+    homography:
+      - [1.0, 0.0, 2969.2424]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+
+  - name: cam5
+    serial: "338122300640"
+    angle_range_deg: [120.0, 180.0]
+    homography:
+      - [1.0, 0.0, 3750.2424]
+      - [0.0, 1.0, -10.0]
+      - [0.0, 0.0, 1.0]
+    offset:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]

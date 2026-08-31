@@ -1,5 +1,7 @@
-opencv-python
-opencv-contrib-python
-numpy
-cupy-cuda12x
-pyrealsense2
+# Runtime and test dependencies for Python 3.11.
+numpy==2.2.6
+opencv-python==4.12.0.88
+PyYAML==6.0.2
+pyrealsense2==2.56.5.9235
+cupy-cuda12x[ctk]==14.2.0
+pytest==8.4.1
